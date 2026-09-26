@@ -2,6 +2,7 @@ import { firebaseConfig, cloudinaryConfig } from './config.js';
 const $ = id => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
 let db, sdk, unsubscribe, nickname = '', busy = false, file = null, previewURL = null, uploaded = null;
+let avatarUrl = saved('moyeo.avatar'), avatarFile = null, avatarPreviewURL = null, profileBusy = false;
 let connected = false, lastSend = 0, pendingRef = null;
 function saved(key, fallback='') { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
 function save(key, value) { try { localStorage.setItem(key,value); } catch {} }
@@ -12,6 +13,28 @@ function status(message, error=false) { $('status').textContent=message; $('stat
 function safeImage(url) {
   try { const u=new URL(url); return u.protocol==='https:' && u.hostname==='res.cloudinary.com' && u.pathname.startsWith(`/${cloudinaryConfig.cloudName}/image/upload/`) && !u.username && !u.password && !u.port; } catch { return false; }
 }
+function avatarNode(url, name) {
+  const wrap=document.createElement('div'); wrap.className='avatar';
+  const fallback=document.createElement('span'); fallback.textContent=Array.from(name || '?')[0]; wrap.append(fallback);
+  if(url && (url===avatarPreviewURL || safeImage(url))) {
+    const img=document.createElement('img'); img.src=url; img.alt=`${name || '내'} 프로필 사진`; img.referrerPolicy='no-referrer';
+    img.onerror=()=>{img.hidden=true;}; wrap.append(img);
+  }
+  return wrap;
+}
+function previewAvatar() { $('avatar-preview').replaceChildren(avatarNode(avatarPreviewURL || avatarUrl, $('nickname').value)); }
+function clearAvatarSelection() { if(avatarPreviewURL)URL.revokeObjectURL(avatarPreviewURL); avatarPreviewURL=null; avatarFile=null; $('avatar-file').value=''; }
+if(!safeImage(avatarUrl))avatarUrl='';
+previewAvatar();
+$('nickname').addEventListener('input',previewAvatar);
+$('avatar-file').addEventListener('change',()=>{
+  const next=$('avatar-file').files[0]; if(!next)return;
+  if(!['image/jpeg','image/png','image/webp'].includes(next.type) || !next.size || next.size>MAX_FILE) {
+    $('avatar-file').value=''; status('프로필 사진은 JPG, PNG, WebP 형식의 5MB 이하 파일을 선택해 주세요.',true); return;
+  }
+  clearAvatarSelection(); avatarFile=next; avatarPreviewURL=URL.createObjectURL(next); previewAvatar();
+});
+$('avatar-remove').onclick=()=>{clearAvatarSelection(); avatarUrl=''; previewAvatar();};
 function controls() { $('send').disabled=busy || !connected || !navigator.onLine; $('photo').disabled=busy; $('text').disabled=busy; $('remove').disabled=busy; $('rename').disabled=busy; }
 function clearPhoto() { if(previewURL) URL.revokeObjectURL(previewURL); previewURL=null; file=null; uploaded=null; $('photo').value=''; $('attachment').hidden=true; $('preview').removeAttribute('src'); }
 $('photo').addEventListener('change',()=>{
@@ -46,7 +69,8 @@ function render(snapshot) {
       button.append(img);button.onclick=()=>{$('full-image').src=data.imageUrl;$('viewer').showModal();};bubble.append(button);
     }
     if(data.text){const body=document.createElement('p');body.className='body';body.textContent=data.text;bubble.append(body);}
-    row.append(meta,bubble);fragment.append(row);
+    const content=document.createElement('div');content.className='message-content';content.append(meta,bubble);
+    row.append(avatarNode(data.avatarUrl,data.nickname),content);fragment.append(row);
   });
   box.replaceChildren(fragment);box.dataset.loaded='true';
   if(bottom||initial)box.scrollTop=box.scrollHeight;
@@ -66,22 +90,32 @@ function friendly(error) {
   if(error.name==='AbortError')return '사진 업로드 시간이 초과됐어요. 다시 시도해 주세요.';
   return error.message || '연결에 실패했어요. 인터넷과 설정을 확인해 주세요.';
 }
-$('join-form').addEventListener('submit',event=>{
-  event.preventDefault(); const value=$('nickname').value.trim(); if(!value || value.length>20)return;
-  nickname=value;save('moyeo.nickname',value);$('join').hidden=true;$('chat').hidden=false;$('rename').hidden=false;listen();$('text').focus();
+$('join-form').addEventListener('submit',async event=>{
+  event.preventDefault(); const value=$('nickname').value.trim(); if(profileBusy || !sdk || !value || value.length>20)return;
+  profileBusy=true;
+  for(const id of ['join-button','nickname','avatar-file','avatar-remove'])$(id).disabled=true;
+  try {
+    if(avatarFile){status('프로필 사진을 올리고 있어요…');avatarUrl=await uploadImage(avatarFile);clearAvatarSelection();}
+    nickname=value;save('moyeo.nickname',value);save('moyeo.avatar',avatarUrl);previewAvatar();
+    $('join').hidden=true;$('chat').hidden=false;$('rename').hidden=false;listen();$('text').focus();
+  } catch(error){status(friendly(error)+' 프로필 사진을 다시 선택하거나 재시도해 주세요.',true);}
+  finally{profileBusy=false;for(const id of ['join-button','nickname','avatar-file','avatar-remove'])$(id).disabled=false;}
 });
-$('rename').onclick=()=>{unsubscribe?.();connected=false;$('chat').hidden=true;$('join').hidden=false;$('rename').hidden=true;$('nickname').focus();status('새 닉네임을 입력해 주세요.');};
+$('rename').onclick=()=>{unsubscribe?.();connected=false;$('chat').hidden=true;$('join').hidden=false;$('rename').hidden=true;$('nickname').focus();status('닉네임이나 프로필 사진을 변경해 주세요.');};
 $('text').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();$('composer').requestSubmit();}});
 async function uploadPhoto() {
-  if(uploaded)return uploaded;
-  const form=new FormData();form.append('file',file);form.append('upload_preset',cloudinaryConfig.uploadPreset);
+  if(!uploaded)uploaded=await uploadImage(file);
+  return uploaded;
+}
+async function uploadImage(selectedFile) {
+  const form=new FormData();form.append('file',selectedFile);form.append('upload_preset',cloudinaryConfig.uploadPreset);
   const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),60000);
   try {
     const response=await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudinaryConfig.cloudName)}/image/upload`,{method:'POST',body:form,signal:controller.signal});
     const result=await response.json();
     if(!response.ok)throw new Error('사진 업로드 실패: '+(result.error?.message||response.status));
     if(!safeImage(result.secure_url))throw new Error('사진 서버가 올바르지 않은 주소를 반환했어요.');
-    uploaded=result.secure_url;return uploaded;
+    return result.secure_url;
   } finally {clearTimeout(timeout);}
 }
 $('composer').addEventListener('submit',async event=>{
@@ -96,14 +130,14 @@ $('composer').addEventListener('submit',async event=>{
     const imageUrl=file?await uploadPhoto():'';
     pendingRef=sdk.doc(sdk.collection(db,'rooms','public','messages'));
     // 서버 승인을 기다립니다. 오프라인 큐를 중복 재전송하지 않습니다.
-    await sdk.setDoc(pendingRef,{nickname,senderId,text,imageUrl,createdAt:sdk.serverTimestamp()});
+    await sdk.setDoc(pendingRef,{nickname,senderId,text,imageUrl,avatarUrl,createdAt:sdk.serverTimestamp()});
     pendingRef=null;lastSend=Date.now();$('text').value='';clearPhoto();$('messages').scrollTop=$('messages').scrollHeight;status('전송했어요.');
   } catch(error) { pendingRef=null;status(friendly(error)+' 입력과 사진은 유지돼요.',true); }
   finally {busy=false;controls();$('text').focus();}
 });
 window.addEventListener('offline',()=>{status(busy?'연결이 끊겼어요. 전송 승인 대기 중입니다. 이 페이지를 유지해 주세요.':'오프라인이에요. 다시 연결되면 대화가 이어져요.',true);controls();});
 window.addEventListener('online',()=>{status('연결을 다시 확인하고 있어요…');controls();});
-window.addEventListener('beforeunload',event=>{if(busy){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(busy || profileBusy){event.preventDefault();event.returnValue='';}});
 async function boot() {
   $('join-button').disabled=true;
   const values=[firebaseConfig.apiKey,firebaseConfig.projectId,firebaseConfig.appId,cloudinaryConfig.cloudName,cloudinaryConfig.uploadPreset];

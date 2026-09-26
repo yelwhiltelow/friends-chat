@@ -180,3 +180,11 @@ preset이 악용되면 즉시 preset을 비활성화하거나 삭제하고 새 p
 - Cloudinary upload presets: https://cloudinary.com/documentation/upload_presets
 - Cloudinary 브라우저 업로드: https://cloudinary.com/documentation/client_side_uploading
 - GitHub Pages 생성: https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site
+
+## 프로필 사진 추가 버전
+
+입장 화면에서 프로필 사진을 선택한 뒤 입장하면 Cloudinary에 업로드됩니다. 채팅 메시지 옆에 원형 사진이 표시됩니다. 사진이 없거나 불러오지 못하면 닉네임 첫 글자를 표시합니다. 상단 **프로필 변경**에서 사진을 바꾸거나 기본 이미지로 되돌릴 수 있습니다. 기존 Cloudinary unsigned preset을 그대로 사용하며 config.js에 추가할 값은 없습니다.
+
+프로필 사진 주소는 이 브라우저에 저장되고 **새로 보내는 메시지**에 함께 기록됩니다. 이전 메시지의 프로필 사진은 발송 당시 상태를 유지합니다. 기존 메시지에는 기본 이미지가 표시됩니다. 계정 로그인 기능이 아니므로 다른 기기와 프로필이 자동 동기화되지는 않습니다.
+
+업데이트: 기존 config.js 설정은 유지하고 index.html, styles.css, app.js를 교체하세요. **새 firestore.rules를 Firebase Console에서 반드시 다시 게시**해야 프로필 사진 필드가 포함된 메시지를 보낼 수 있습니다. 규칙의 Cloud name이 본인 계정과 일치하는지도 확인하세요. 사진 변경/제거 시 Cloudinary의 이전 사진은 자동 삭제되지 않습니다.

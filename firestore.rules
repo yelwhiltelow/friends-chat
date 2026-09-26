@@ -9,7 +9,7 @@ service cloud.firestore {
       allow list: if request.query.limit != null && request.query.limit <= 100;
       allow get: if false;
       allow create: if request.resource.data.keys().hasAll(['nickname','senderId','text','imageUrl','createdAt'])
-        && request.resource.data.keys().hasOnly(['nickname','senderId','text','imageUrl','createdAt'])
+        && request.resource.data.keys().hasOnly(['nickname','senderId','text','imageUrl','avatarUrl','createdAt'])
         && request.resource.data.nickname is string
         && request.resource.data.nickname.size() >= 1
         && request.resource.data.nickname.size() <= 20
@@ -20,6 +20,10 @@ service cloud.firestore {
         && request.resource.data.imageUrl is string
         && request.resource.data.imageUrl.size() <= 1000
         && validImage(request.resource.data.imageUrl)
+        && (!('avatarUrl' in request.resource.data) ||
+          (request.resource.data.avatarUrl is string
+          && request.resource.data.avatarUrl.size() <= 1000
+          && validImage(request.resource.data.avatarUrl)))
         && (request.resource.data.text.size() > 0 || request.resource.data.imageUrl.size() > 0)
         && request.resource.data.createdAt is timestamp
         && request.resource.data.createdAt == request.time;
