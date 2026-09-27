@@ -1,9 +1,11 @@
+import { initPush, pushConfigured, pushRequest, currentDeviceId } from './notifications.js';
 import { firebaseConfig, cloudinaryConfig } from './config.js';
 const $ = id => document.getElementById(id);
 const MAX_FILE = 5 * 1024 * 1024;
 let db, sdk, unsubscribe, nickname = '', busy = false, file = null, previewURL = null, uploaded = null;
 let avatarUrl = saved('moyeo.avatar'), avatarFile = null, avatarPreviewURL = null, profileBusy = false;
-let connected = false, lastSend = 0, pendingRef = null;
+let connected = false, lastSend = 0, pendingRef = null, pendingMessage = null;
+try { pendingMessage=JSON.parse(saved('moyeo.pending','null')); } catch {}
 function saved(key, fallback='') { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
 function save(key, value) { try { localStorage.setItem(key,value); } catch {} }
 const senderId = saved('moyeo.sender', crypto.randomUUID());
@@ -35,7 +37,7 @@ $('avatar-file').addEventListener('change',()=>{
   clearAvatarSelection(); avatarFile=next; avatarPreviewURL=URL.createObjectURL(next); previewAvatar();
 });
 $('avatar-remove').onclick=()=>{clearAvatarSelection(); avatarUrl=''; previewAvatar();};
-function controls() { $('send').disabled=busy || !connected || !navigator.onLine; $('photo').disabled=busy; $('text').disabled=busy; $('remove').disabled=busy; $('rename').disabled=busy; }
+function controls() { $('send').textContent=pendingMessage?'전송 확인':'보내기 ↑'; $('send').disabled=busy || !connected || !navigator.onLine; $('photo').disabled=busy || !!pendingMessage; $('text').disabled=busy || !!pendingMessage; $('remove').disabled=busy || !!pendingMessage; $('rename').disabled=busy || !!pendingMessage; }
 function clearPhoto() { if(previewURL) URL.revokeObjectURL(previewURL); previewURL=null; file=null; uploaded=null; $('photo').value=''; $('attachment').hidden=true; $('preview').removeAttribute('src'); }
 $('photo').addEventListener('change',()=>{
   const next=$('photo').files[0]; if(!next)return;
@@ -121,18 +123,31 @@ async function uploadImage(selectedFile) {
 $('composer').addEventListener('submit',async event=>{
   event.preventDefault(); const text=$('text').value.trim();
   if(busy||!connected||!navigator.onLine)return;
-  if(!text&&!file)return;
+  if(!text&&!file&&!pendingMessage)return;
   if(text.length>2000){status('메시지는 2,000자까지 보낼 수 있어요.',true);return;}
   if(Date.now()-lastSend<1500){status('잠깐 기다린 뒤 보내 주세요.');return;}
   busy=true;controls();
   try {
     status(file?'사진을 올리고 있어요…':'메시지를 보내고 있어요…');
-    const imageUrl=file?await uploadPhoto():'';
-    pendingRef=sdk.doc(sdk.collection(db,'rooms','public','messages'));
-    // 서버 승인을 기다립니다. 오프라인 큐를 중복 재전송하지 않습니다.
-    await sdk.setDoc(pendingRef,{nickname,senderId,text,imageUrl,avatarUrl,createdAt:sdk.serverTimestamp()});
+    if(pushConfigured()) {
+      if(!pendingMessage) {
+        const imageUrl=file?await uploadPhoto():'';
+        pendingMessage={id:crypto.randomUUID(),nickname,senderId,deviceId:currentDeviceId(),text,imageUrl,avatarUrl};
+        save('moyeo.pending',JSON.stringify(pendingMessage));
+      }
+      await pushRequest('/messages',pendingMessage);
+      pendingMessage=null;save('moyeo.pending','null');
+    } else {
+      const imageUrl=file?await uploadPhoto():'';
+      pendingRef=sdk.doc(sdk.collection(db,'rooms','public','messages'));
+      await sdk.setDoc(pendingRef,{nickname,senderId,text,imageUrl,avatarUrl,createdAt:sdk.serverTimestamp()});
+    }
     pendingRef=null;lastSend=Date.now();$('text').value='';clearPhoto();$('messages').scrollTop=$('messages').scrollHeight;status('전송했어요.');
-  } catch(error) { pendingRef=null;status(friendly(error)+' 입력과 사진은 유지돼요.',true); }
+  } catch(error) {
+    pendingRef=null;
+    if([400,409,422].includes(error.status)){pendingMessage=null;save('moyeo.pending','null');}
+    status(friendly(error)+(pendingMessage?' 전송 확인 대기 중이에요. 보내기를 다시 누르면 같은 메시지를 중복 없이 확인해요.':' 입력과 사진은 유지돼요.'),true);
+  }
   finally {busy=false;controls();$('text').focus();}
 });
 window.addEventListener('offline',()=>{status(busy?'연결이 끊겼어요. 전송 승인 대기 중입니다. 이 페이지를 유지해 주세요.':'오프라인이에요. 다시 연결되면 대화가 이어져요.',true);controls();});
@@ -147,4 +162,11 @@ async function boot() {
     sdk=firestore;db=sdk.getFirestore(app.initializeApp(firebaseConfig));$('join-button').disabled=false;status('준비됐어요. 닉네임을 입력하고 참여하세요.');
   } catch(error){status('앱을 불러오지 못했어요. 설정, 인터넷 연결, 광고 차단 확장 기능을 확인해 주세요. '+friendly(error),true);}
 }
+if(pendingMessage){
+  $('text').value=pendingMessage.text || '';
+  if(pendingMessage.imageUrl&&safeImage(pendingMessage.imageUrl)){
+    $('preview').src=pendingMessage.imageUrl;$('filename').textContent='전송 확인 대기 중인 사진';$('attachment').hidden=false;
+  }
+}
+initPush();
 boot();

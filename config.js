@@ -11,3 +11,9 @@ export const cloudinaryConfig = {
   cloudName: "fpvjrdlp",
   uploadPreset: "friends_chat_unsigned",
 };
+
+// 알림 서버의 공개 주소와 VAPID 공개 키만 입력하세요. 비밀 키는 넣지 마세요.
+export const pushConfig = {
+  workerUrl: "", // 예: https://moyeo-push.사용자.workers.dev
+  vapidPublicKey: "", // tools/push-keys.html에서 생성한 공개 키
+};
